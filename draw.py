@@ -1,727 +1,641 @@
 #!/usr/bin/env python3
-"""THE DAILY ATLAS — one page that holds a whole day of world news.
+"""The Daily Atlas — NI22 challenger for @rojanon11 (build script).
 
-Edition: Sunday 22 November 2026, made for the MakeFun
-news-image-20261122 bounty by @rojanon11 (GitHub @Butuamu110).
-
-How the page is put together:
-  * a green gazetteer bar and a burgundy hook band across the top,
-  * a six-slot UTC timeline and a "day in numbers" row under it,
-  * thirteen pictured story cards (three wide leads, then two rows
-    of five), each with its own little flat illustration,
-  * a real-polygon world map with numbered pins for the cards and
-    dots for the briefs, beside a column of 27 one-line briefs,
-  * a DATE CHECK band near the foot naming the older and
-    not-yet-happened items that were deliberately kept off the page.
-
-Every fact on the page comes from POOL22-BARU v3 — thirteen events
-verified for 22 November 2026, nothing from the retired pool. COP31
-sits in Antalya, Türkiye. Contested claims stay attributed to the
-outlet that made them. Rendering is pure PIL, fully deterministic,
-and needs no network: run `python3 draw.py` to rebuild entry.png.
+Flat 2D broadsheet, 1024x1024, PIL only. Date is the masthead (R1),
+red numbers strip in the top 22% (R2), three pictorial lead scenes
+>=85px with in-strip data labels (R3), a data strip + source tag on
+every one of the 13 cards (R4/R5), one red accent (R6), real-polygon
+world map confined to the bottom panel. All stories come from
+POOL22-BARU (13 verified events of Sunday 22 November 2026).
 """
-import math
 import os
-import random
-import sys
-
 from PIL import Image, ImageDraw, ImageFont
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, BASE)
-from mapdata import WORLD  # noqa: E402  (real country polygons)
+HERE = os.path.dirname(os.path.abspath(__file__))
+W, H = 1024, 1024
 
-# ---------------------------------------------------------------- page frame
-SIDE = 1024               # the page is square
-EDGE = 24                 # outer margin on every side
-SPAN = SIDE - 2 * EDGE    # usable width inside the margins
+CREAM = (244, 237, 216)
+CREAM2 = (238, 229, 203)
+INK = (26, 24, 20)
+NAVY = (22, 40, 63)
+RED = (179, 32, 42)
+DARKRED = (140, 22, 32)
+WHITE = (250, 248, 240)
+GREY = (110, 102, 88)
 
-# ------------------------------------------------------------------- palette
-CREAM = (243, 234, 211)   # page background
-SHEET = (250, 246, 233)   # pale panel fill
-BODY = (38, 51, 42)       # main ink
-PINE = (31, 81, 48)       # gazetteer green
-WINE = (123, 45, 38)      # hook-band burgundy
-LINERULE = (178, 164, 128)
-CARD_EDGE = (196, 184, 152)
-DEEP_SEA = (24, 54, 38)   # map water
-LANDMASS = (168, 191, 165)
-FADED = (84, 92, 76)      # muted caption ink
-DECK_INK = (64, 74, 62)
-DROP = (120, 108, 80)     # drop-shadow tone (layered layout only)
-BRIEF_INK = (52, 62, 54)
-
-REGION_TINT = {
-    "EUROPE": (176, 58, 46),
-    "ASIA": (29, 111, 184),
-    "MIDEAST": (125, 60, 152),
-    "AFRICA": (30, 132, 73),
-    "AMERICAS": (202, 111, 30),
-    "OCEANIA": (20, 143, 119),
-    "GLOBAL": (93, 109, 126),
+REGIONS = {
+    "MIDEAST": (140, 90, 43),
+    "GLOBAL": (46, 110, 106),
+    "OCEANIA": (63, 122, 58),
+    "ASIA": (107, 78, 158),
+    "EUROPE": (47, 93, 138),
+    "AMERICAS": (176, 106, 40),
 }
 
-# --------------------------------------------------------------------- fonts
-_font_memo = {}
+_cache = {}
 
 
-def _load_font(filename, size):
-    return ImageFont.truetype(os.path.join(BASE, "fonts", filename), size)
+def F(name, size):
+    key = (name, size)
+    if key not in _cache:
+        _cache[key] = ImageFont.truetype(os.path.join(HERE, "fonts", name), size)
+    return _cache[key]
 
 
-def display(size):
-    """Playfair Display 900 — masthead and headlines."""
-    key = ("display", size)
-    if key not in _font_memo:
-        _font_memo[key] = _load_font("PlayfairDisplay-900.ttf", size)
-    return _font_memo[key]
+def AB(size):
+    return F("Archivo-Bold.ttf", size)
 
 
-def bold(size):
-    """Archivo Bold — labels, chips, kickers."""
-    key = ("bold", size)
-    if key not in _font_memo:
-        _font_memo[key] = _load_font("Archivo-Bold.ttf", size)
-    return _font_memo[key]
+def AM(size):
+    return F("Archivo-Medium.ttf", size)
 
 
-def plain(size):
-    """Archivo Medium — decks, briefs, captions."""
-    key = ("plain", size)
-    if key not in _font_memo:
-        _font_memo[key] = _load_font("Archivo-Medium.ttf", size)
-    return _font_memo[key]
+def PF(size):
+    return F("PlayfairDisplay-900.ttf", size)
 
 
-# --------------------------------------------------------------- text helpers
-def text_w(draw, s, font):
-    return draw.textlength(s, font=font)
+def tw(d, text, font):
+    return d.textlength(text, font=font)
 
 
-def wrap_lines(draw, s, font, maxw):
-    """Greedy word wrap: keep adding words while the line still fits."""
-    done, current = [], ""
-    for word in s.split():
-        trial = (current + " " + word).strip()
-        if text_w(draw, trial, font) <= maxw or not current:
-            current = trial
+def wrap(d, text, font, maxw):
+    words, lines, cur = text.split(), [], ""
+    for w_ in words:
+        t = (cur + " " + w_).strip()
+        if tw(d, t, font) <= maxw or not cur:
+            cur = t
         else:
-            done.append(current)
-            current = word
-    if current:
-        done.append(current)
-    return done
+            lines.append(cur)
+            cur = w_
+    if cur:
+        lines.append(cur)
+    return lines
 
 
-def shrink_to_fit(draw, s, start, maxw, floor=8):
-    """Largest Archivo Bold size, from `start` down, that fits `maxw`."""
-    size = start
-    while size > floor and text_w(draw, s, bold(size)) > maxw:
-        size -= 1
-    return bold(size)
+def text(d, xy, s, font, fill=INK, anchor="la"):
+    d.text(xy, s, font=font, fill=fill, anchor=anchor)
 
 
-def centred(draw, cx, y, s, font, fill):
-    draw.text((cx - text_w(draw, s, font) / 2, y), s, font=font, fill=fill)
+def chip(d, x, y, s, font, bg, fg=WHITE, pad=6):
+    w_ = int(tw(d, s, font)) + pad * 2
+    h_ = font.size + 7
+    d.rounded_rectangle([x, y, x + w_, y + h_], radius=h_ // 2, fill=bg)
+    text(d, (x + pad, y + 3), s, font, fg)
+    return w_, h_
 
 
-# ------------------------------------------------------------- the day's data
-# The six figures in the numbers row; every one is bound to a card below.
-DAY_FIGURES = [
-    ("2", "Patriot radars IRGC CLAIMS hit"),
-    ("720/9", "India declared in Wellington"),
-    ("50", "laps, Las Vegas Grand Prix"),
-    ("$4M", "LPGA CME winner's prize"),
-    ("12-2", "Kyushu Basho leaders"),
-    ("06:00", "COP31 approval plenary, Antalya"),
+def caption_band(d, x, y, w_, s):
+    """Navy band 16px at the bottom inside a strip (skill SS8 device 1)."""
+    d.rectangle([x, y - 16, x + w_, y], fill=NAVY)
+    f = AB(10)
+    text(d, (x + w_ // 2, y - 13), s, f, WHITE, anchor="ma")
+
+
+def source_pill(d, x, y, w_, s):
+    f = AB(9)
+    pw = int(tw(d, s, f)) + 12
+    d.rounded_rectangle([x + w_ - pw - 4, y + 4, x + w_ - 4, y + 17],
+                        radius=6, fill=(250, 248, 240))
+    text(d, (x + w_ - pw + 2, y + 6), s, f, NAVY)
+
+
+# ---------------------------------------------------------------- stories
+# leads: pool events 1 (Gulf), 3 (COP31), 5 (India). Cards 4-13: the other
+# ten pool events in pool order (2,4,6,7,8,9,10,11,12,13).
+LEADS = [
+    dict(num=1, region="MIDEAST", topic="CONFLICT", tag="CLAIM · IRGC",
+         headline="Iran claims overnight strikes on US radars in the Gulf",
+         deck="The IRGC says its missiles and drones hit 2 Patriot radars "
+              "at Al-Riffa and Awali; a civil site burned in Bahrain and a "
+              "drone was downed over Kuwait. A tanker was attacked near "
+              "Hormuz.",
+         facts=5, scene="gulf"),
+    dict(num=2, region="GLOBAL", topic="CLIMATE", tag="REUTERS",
+         headline="COP31 final text tabled for dawn approval in Antalya",
+         deck="President Murat Kurum tabled the final package late "
+              "Saturday; objections closed at 03:00 GMT and the approval "
+              "plenary sits at 06:00 GMT Sunday. The $120bn adaptation "
+              "target fell Thursday.",
+         facts=4, scene="cop31"),
+    dict(num=3, region="OCEANIA", topic="CRICKET", tag="IANS / AFP",
+         headline="India declare at 720/9 — a Wellington Test record",
+         deck="Rahul made 136 and Pant 128 as India posted the highest Test "
+              "total ever made in New Zealand. Ahead by 352 after New "
+              "Zealand's 368, they declared on the fourth afternoon.",
+         facts=4, scene="cricket"),
 ]
 
-# Six moments of the day, WIB, in the order they happened.
-DAY_CLOCK = [
-    ("02:40 WIB", "IRGC first Gulf statement"),
-    ("03:43 WIB", "Mecca sirens sound"),
-    ("04:05 WIB", "Myanmar M4.1 quake"),
-    ("05:42 WIB", "Mecca interception confirmed"),
-    ("11:00 WIB", "Las Vegas GP lights out"),
-    ("19:16 WIB", "Falcon 9 NROL-136 lifts off"),
+MINIS = [
+    dict(num=4, region="MIDEAST", topic="AIR DEFENCE", tag="CONFIRMED · ANADOLU",
+         headline="Houthi missile intercepted bound for Makkah",
+         deck="Sirens sounded at 23:43 Riyadh time; the Saudi-led "
+              "coalition confirmed the interception at 01:42 Sunday.",
+         facts=2, strip="houthi", label="INTERCEPTED 01:42 LOCAL"),
+    dict(num=5, region="ASIA", topic="EARTHQUAKE", tag="NCS · VIA ANI",
+         headline="M4.1 earthquake recorded in Myanmar",
+         deck="Logged at 02:35:57 IST on 22 Nov, 95 km deep, at "
+              "24.404N, 94.616E.",
+         facts=3, strip="quake", label="95 KM DEEP · 02:35 IST"),
+    dict(num=6, region="AMERICAS", topic="FORMULA 1", tag="FORMULA1.COM",
+         headline="Las Vegas GP runs under the Strip lights",
+         deck="Lights out 20:00 PT Sat = 04:00 UTC Sun; 50 laps of the "
+              "Strip Circuit, round 22.",
+         facts=3, strip="f1", label="50 LAPS · ROUND 22"),
+    dict(num=7, region="AMERICAS", topic="SPACE", tag="OFFICIAL · VSFB",
+         headline="Falcon 9 to launch NROL-136 spy batch",
+         deck="Window 12:16–12:46 UTC at SLC-4E; booster B1097 lands "
+              "at LZ-4; the NRO's 15th batch.",
+         facts=3, strip="rocket", label="WINDOW 12:16–12:46 UTC"),
+    dict(num=8, region="EUROPE", topic="FOOTBALL", tag="PREMIERLEAGUE.COM",
+         headline="Liverpool host Man United at Anfield",
+         deck="Anfield at 16:30 UTC, Matchweek 11; Hull v Brighton "
+              "opens Sunday at 14:00 UTC.",
+         facts=3, strip="football", label="16:30 UTC · MATCHWEEK 11"),
+    dict(num=9, region="EUROPE", topic="TENNIS", tag="ATP / REUTERS",
+         headline="Alcaraz meets Zverev in the Turin final",
+         deck="Sunday evening in Turin, about 16:00 UTC; Alcaraz came "
+              "back against Shelton to reach it.",
+         facts=3, strip="tennis", label="FINAL · SUNDAY EVENING"),
+    dict(num=10, region="AMERICAS", topic="GOLF", tag="LPGA / AP",
+         headline="Kim leads by one into the $4m final round",
+         deck="Kim at -18 at Tiburón, one ahead of Thitikul and "
+              "Yoshida; the $4m prize is women's golf's largest.",
+         facts=3, strip="golf", label="KIM -18 · LEADS BY 1"),
+    dict(num=11, region="ASIA", topic="SUMO", tag="JSA · SUMO",
+         headline="Two leaders into sumo's final day",
+         deck="Onosato and Wakamotoharu stand 12-2 in Fukuoka; "
+              "Atamifuji 11-3; last bouts about 09:00 UTC.",
+         facts=3, strip="sumo", label="12-2 · TWO SHARE THE LEAD"),
+    dict(num=12, region="AMERICAS", topic="GOLF", tag="REUTERS",
+         headline="RSM Classic third round moves to Sunday",
+         deck="Saturday was rained out; three share the lead at -9; "
+              "Sunday tees 14:10–16:00 UTC, final Monday.",
+         facts=3, strip="rsm", label="3 SHARE -9 · RAIN DELAY"),
+    dict(num=13, region="AMERICAS", topic="NFL", tag="ESPN / NFL",
+         headline="Eleven Sunday games in NFL Week 12",
+         deck="Early window 13:00 ET (18:00 UTC); the day closes with "
+              "Vikings @ 49ers at 20:20 ET.",
+         facts=3, strip="nfl", label="11 GAMES · WEEK 12"),
 ]
 
-# Story tally per region, counted from the cards and briefs: 4+5+7+0+15+5+4.
-REGION_TALLY = [
-    ("EUROPE", 4), ("ASIA", 5), ("MIDEAST", 7), ("AFRICA", 0),
-    ("AMERICAS", 15), ("OCEANIA", 5), ("GLOBAL", 4),
+NUMBERS = [
+    ("2", "PATRIOT RADARS CLAIMED HIT · BAHRAIN"),
+    ("06:00", "GMT — COP31 APPROVAL PLENARY"),
+    ("720/9", "INDIA DECLARED · WELLINGTON"),
+    ("352", "INDIA'S LEAD OVER NEW ZEALAND"),
+    ("M4.1", "MYANMAR QUAKE · 95 KM DEEP"),
+    ("$4M", "LPGA WINNER'S PRIZE · NAPLES"),
 ]
 
-# The thirteen pictured stories, one row per verified event:
-# (number, dateline, region, topic, headline, deck, full tag, short tag,
-#  label chip, strip caption, longitude, latitude, scene key)
-STORY_ROWS = [
-    (1, "THE GULF", "MIDEAST", "WAR",
-     "Gulf hit overnight: radars, fire, drones",
-     "IRGC claims missiles and drones hit 2 US Patriot radars in Bahrain; a civilian plant burns. A drone is downed at Ali Al Salem, Kuwait. (IRGC / Bahrain)",
-     "CLAIM - IRGC", "IRGC", "2 RADARS CLAIMED",
-     "THE GULF - OVERNIGHT STRIKES", 50.5, 26.0, "gulf"),
-    (2, "MAKKAH REGION", "MIDEAST", "DEFENCE",
-     "Houthi missile to Makkah is intercepted",
-     "Civil-defence sirens sound at 23:43 Riyadh time; the Saudi-led coalition confirms the interception at 01:42. No damage reported. (Anadolu)",
-     "CONFIRMED - ANADOLU", "ANADOLU", "INTERCEPTED 01:42",
-     "MAKKAH - MISSILE DOWNED", 39.8, 21.4, "intercept"),
-    (3, "ANTALYA", "GLOBAL", "CLIMATE",
-     "COP31 final text tabled in Antalya",
-     "President Murat Kurum tables the final package; objections close 03:00 GMT and the approval plenary is set for 06:00 GMT Sunday. (Reuters)",
-     "REUTERS", "REUTERS", "FINAL TEXT 06:00 GMT",
-     "ANTALYA - FINAL TEXT TABLED", 30.7, 36.9, "cop"),
-    (4, "MYANMAR", "ASIA", "QUAKE",
-     "M4.1 quake strikes Myanmar at 04:05 WIB",
-     "NCS records a magnitude 4.1 quake at 02:35:57 IST, 95 km deep, epicentre 24.404N 94.616E. (NCS / ANI)",
-     "NCS - ANI", "NCS", "M4.1 - 95 KM DEEP",
-     "MYANMAR - M4.1 QUAKE", 94.6, 24.4, "quake"),
-    (5, "WELLINGTON", "OCEANIA", "CRICKET",
-     "India declare 720/9 - a record in New Zealand",
-     "India declare 720/9 on day four: Rahul 136, Pant 128. New Zealand made 368 (Nicholls 175, Bumrah 4-92); India lead by 352. (IANS / AFP)",
-     "IANS - AFP", "IANS", "720/9 DECLARED",
-     "WELLINGTON - RECORD 720/9", 174.8, -41.3, "cricket"),
-    (6, "LAS VEGAS", "AMERICAS", "MOTORSPORT",
-     "Las Vegas Grand Prix races under the lights",
-     "Lights out 04:00 UTC (11:00 WIB) for 50 laps of the Strip Circuit, round 22. (formula1.com)",
-     "FORMULA1.COM", "F1.COM", "50 LAPS - ROUND 22",
-     "LAS VEGAS - GP UNDER LIGHTS", -115.2, 36.1, "f1"),
-    (7, "VANDENBERG", "AMERICAS", "SPACE",
-     "Falcon 9 launches NROL-136 at 19:16 WIB",
-     "SpaceX launches the 15th NRO constellation batch from SLC-4E; booster B1097 returns to LZ-4. (VSFB)",
-     "VSFB - SPACEX", "VSFB", "B1097 RETURNS TO LZ-4",
-     "VANDENBERG - NROL-136 UP", -120.5, 34.7, "rocket"),
-    (8, "ANFIELD", "EUROPE", "FOOTBALL",
-     "Liverpool host Manchester United at 23:30 WIB",
-     "The derby closes Premier League Matchweek 11 at Anfield, 16:30 UTC. Hull host Brighton at 21:00 WIB. (PL)",
-     "PREMIER LEAGUE", "PL", "16:30 UTC - ANFIELD",
-     "ANFIELD - DERBY NIGHT", -2.96, 53.43, "football"),
-    (9, "TURIN", "EUROPE", "TENNIS",
-     "Alcaraz v Zverev for the Turin title",
-     "The ATP Finals title match is played Sunday night in Turin (about 16:00 UTC). Alcaraz rallied past Shelton. (ATP)",
-     "ATP - REUTERS", "ATP", "FINAL - TURIN",
-     "TURIN - ATP FINALS", 7.7, 45.1, "tennis"),
-    (10, "NAPLES, FLORIDA", "AMERICAS", "GOLF",
-     "A Lim Kim leads the LPGA finale at -18",
-     "The CME finale is played Sunday at Tiburon; Kim leads by one from Thitikul and Yoshida. Winner takes $4m. (LPGA)",
-     "LPGA.COM", "LPGA", "-18 LEADS BY ONE",
-     "NAPLES - LPGA FINALE", -81.8, 26.1, "golf"),
-    (11, "FUKUOKA", "ASIA", "SUMO",
-     "Kyushu Basho ends: two men tied at 12-2",
-     "Senshuraku at Fukuoka: Onosato and Wakamotoharu are 12-2, Atamifuji 11-3. Onosato faces Hoshoryu. (JSA)",
-     "JSA", "JSA", "12-2 - TITLE DECIDER",
-     "FUKUOKA - SENSHURAKU", 130.4, 33.6, "sumo"),
-    (12, "GEORGIA", "AMERICAS", "GOLF",
-     "RSM Classic round three moves to Sunday",
-     "Saturday washed out, so round three is played Sunday at Sea Island; three share the lead at -9. Final Monday. (PGA)",
-     "PGA TOUR - REUTERS", "PGA", "THREE TIED AT -9",
-     "SEA ISLAND - RSM R3 SUNDAY", -81.3, 31.2, "golf2"),
-    (13, "UNITED STATES", "AMERICAS", "NFL",
-     "NFL Week 12: eleven games on Sunday",
-     "The early window opens 18:00 UTC (Monday 01:00 WIB); Vikings visit the 49ers at night. (ESPN / NFL)",
-     "ESPN - NFL", "ESPN", "11 GAMES SUNDAY",
-     "USA - NFL WEEK 12", -98.0, 39.0, "nfl"),
+TIMELINE = [
+    ("OVERNIGHT", "IRGC Gulf claims from 19:40 UTC"),
+    ("03:00 GMT", "COP31 objections close, Antalya"),
+    ("04:00 UTC", "Las Vegas GP lights out"),
+    ("06:00 GMT", "COP31 approval plenary sits"),
+    ("09:00 UTC", "Sumo's final bouts, Fukuoka"),
+    ("12:16 UTC", "Falcon 9 window, Vandenberg"),
 ]
 
-_STORY_KEYS = ("no", "place", "region", "topic", "headline", "deck",
-               "tag", "stag", "label", "caption", "lon", "lat", "scene")
-STORIES = [dict(zip(_STORY_KEYS, row)) for row in STORY_ROWS]
-
-# Briefs 14-40: sub-facts of the same thirteen events, all dated 22 Nov.
-# (number, one-line text, region, longitude, latitude)
-BRIEF_ROWS = [
-    (14, "Manama Bahrain demands the UN Security Council enforce Resolution 2817 (Al Jazeera)", "MIDEAST", 50.6, 26.2),
-    (15, "Bahrain A civilian industrial facility catches fire in the overnight strikes (Bahrain)", "MIDEAST", 50.5, 26.0),
-    (16, "Kuwait A drone is intercepted at Ali Al Salem base, the first since September (IRGC)", "MIDEAST", 47.9, 29.3),
-    (17, "Riyadh Mecca sirens sound at 23:43 local time on Saturday night (Anadolu)", "MIDEAST", 46.7, 24.6),
-    (18, "Jeddah The coalition confirms the Makkah interception at 01:42 Sunday (Anadolu)", "MIDEAST", 39.2, 21.5),
-    (19, "Antalya COP31 objections are shut at 03:00 GMT by President Murat Kurum (Reuters)", "GLOBAL", 30.7, 36.9),
-    (20, "Antalya The third draft recalls the Dubai fossil-fuel deal (Reuters)", "GLOBAL", 30.7, 36.9),
-    (21, "Antalya Australia co-hosts the COP31 presidency with Chris Bowen (Reuters)", "GLOBAL", 30.7, 36.9),
-    (22, "Naypyitaw The quake epicentre is 24.404N 94.616E, depth 95 km (NCS)", "ASIA", 94.6, 24.4),
-    (23, "Wellington Rahul 136 and Pant 128 build India's record total (IANS)", "OCEANIA", 174.8, -41.3),
-    (24, "Wellington Gill 98, Jaiswal 85 and Padikkal 80 in the 720/9 (IANS)", "OCEANIA", 174.8, -41.3),
-    (25, "Wellington Nicholls 175 not out; Bumrah takes 4-92 for India (AFP)", "OCEANIA", 174.8, -41.3),
-    (26, "Las Vegas The Strip Circuit hosts round 22 of the season (formula1.com)", "AMERICAS", -115.2, 36.1),
-    (27, "Las Vegas Lights out 04:00 UTC, 11:00 WIB on Sunday (Williams F1)", "AMERICAS", -115.2, 36.1),
-    (28, "Vandenberg The launch window runs 12:16-12:46 UTC (VSFB alert)", "AMERICAS", -120.5, 34.7),
-    (29, "Vandenberg NROL-136 is the 15th batch of the NRO constellation (SpaceX)", "AMERICAS", -120.5, 34.7),
-    (30, "Hull Hull host Brighton at 14:00 UTC, 21:00 WIB (premierleague.com)", "EUROPE", -0.4, 53.7),
-    (31, "Turin Alcaraz rallies past Shelton to reach the final (ATP)", "EUROPE", 7.7, 45.1),
-    (32, "Naples Thitikul and Yoshida trail A Lim Kim by one shot (LPGA)", "AMERICAS", -81.8, 26.1),
-    (33, "Naples The $4m winner's prize is the biggest in women's golf (LPGA)", "AMERICAS", -81.8, 26.1),
-    (34, "Fukuoka Atamifuji sits third at 11-3 going into senshuraku (JSA)", "ASIA", 130.4, 33.6),
-    (35, "Fukuoka Wakamotoharu faces Atamifuji in the title race (JSA)", "ASIA", 130.4, 33.6),
-    (36, "Sea Island Thorbjornsen, Penge and Neergaard-Petersen share -9 (PGA Tour)", "AMERICAS", -81.3, 31.2),
-    (37, "Sea Island The RSM final moves to Monday after the washout (Reuters)", "AMERICAS", -81.3, 31.2),
-    (38, "New York The early NFL window opens 13:00 ET, 18:00 UTC (ESPN)", "AMERICAS", -74.0, 40.7),
-    (39, "San Francisco Vikings visit the 49ers in Sunday Night Football (NFL)", "AMERICAS", -122.4, 37.8),
-    (40, "Wellington India's 720/9 is the highest Test total ever made in New Zealand (AFP)", "OCEANIA", 174.8, -41.3),
+BRIEFS = [
+    "Gill 98 in India's record 720/9",
+    "Jaiswal 85 in the Wellington total",
+    "Padikkal 80 as India declared, day 4",
+    "Nicholls 175 top-scored in NZ's 368",
+    "Bumrah 4-92 in New Zealand's 368",
+    "Bahrain asks UN to enforce Res. 2817",
+    "UKMTO tanker report Sat 11:27 UTC",
+    "IRGC's first statement: 19:40 UTC",
+    "Kuwait interception — first since Sept",
+    "Yusho decider: Onosato v Hoshoryu",
+    "Wakamotoharu v Atamifuji closes basho",
+    "Atamifuji starts the last day 11-3",
+    "RSM Sunday tees run 09:10–11:00 ET",
+    "RSM final round pushed to Monday",
+    "Thitikul one back at -17, Tiburón",
+    "Yoshida one back at -17 into Sunday",
+    "NFL early window opens 13:00 ET",
+    "NFL late window: 16:05–16:25 ET",
+    "Sunday Night: Vikings @ 49ers 20:20 ET",
+    "COP31 objections closed 03:00 GMT",
+    "Bowen co-hosts COP31 for Australia",
+    "Draft 3 recalls the Dubai fossil deal",
+    "B1097 lands back at Landing Zone 4",
+    "NROL-136 slipped from Sat to Sunday",
+    "Strip Circuit hosts round 22 at night",
+    "Myanmar quake struck 95 km deep",
+    "Alcaraz rallied past Shelton, Turin semi",
 ]
 
-DATE_CHECK = ("Left out as earlier news: three missiles over Riyadh (Friday 21 November), the EU-Indonesia "
-              "CEPA signing (Friday 21 November), the France march of 82,500 (Friday 21 November), the ICJ Rohingya "
-              "verdict (Thursday 19 November), the Shenzhen three-leader summit (Thursday 19 November), the FBI NCIC "
-              "breach (Thursday 19 November), Kenya's last Ebola patient going home (Tuesday 11 November), the Norway "
-              "oil ruling (Thursday 13 November), the Lviv strike (Thursday 20 November) and the tanker attack off "
-              "Hormuz (Saturday 11:27 UTC). Not yet happened, so not "
-              "shown: the Davis Cup final (29 November).")
-FOOT_LEFT = "Every story here happened, or was first reported, on Sunday 22 November 2026. Contested claims are attributed."
-FOOT_RIGHT = "Sources named beside each story - original drawings"
+DATECHECK = ("Left out — not 22 Nov: Lviv strikes (20 Nov) · Peru M6.9 quake "
+             "(20/21 Nov) · Sparta II launch (21 Nov) · 3 missiles at Riyadh "
+             "(21 Nov) · France march of 82,500 (21 Nov) · Berlin Coalition "
+             "of the Willing (19 Nov) · ICJ ruling (19 Nov).  Not yet: "
+             "Davis Cup final, 29 Nov.")
+
+# numbered map pins (card number -> lon, lat)
+PINS = {1: (50.5, 26.2), 2: (30.7, 36.9), 3: (174.8, -41.3), 4: (39.8, 21.4),
+        5: (94.6, 24.4), 6: (-112.0, 39.5), 7: (-125.0, 32.0),
+        8: (-2.96, 53.4), 9: (7.7, 45.1), 10: (-81.8, 26.1),
+        11: (130.4, 33.6), 12: (-81.4, 31.2), 13: (-122.0, 37.4)}
+# small dots for briefs
+DOTS = [(56.3, 26.5), (51.5, 25.5), (44.5, 29.0), (174.8, -41.3),
+        (130.4, 33.6), (-81.4, 31.2), (-81.8, 26.1), (-98.0, 39.0),
+        (30.7, 36.9), (94.6, 24.4), (-120.6, 34.7), (55.3, 25.2)]
 
 
-# ------------------------------------------------------- story illustrations
-# One small flat scene per card. Each painter receives the strip's
-# draw handle and its box (x, y, w, h) and fills exactly that box.
-PAINTERS = {}
+# ---------------------------------------------------------------- scenes
+def dashed(d, p0, p1, fill, dash=6, gap=5, width=2):
+    import math
+    x0, y0 = p0
+    x1, y1 = p1
+    dist = math.hypot(x1 - x0, y1 - y0)
+    if dist == 0:
+        return
+    steps = int(dist // (dash + gap)) + 1
+    for i in range(steps):
+        t0 = i * (dash + gap) / dist
+        t1 = min((i * (dash + gap) + dash) / dist, 1.0)
+        d.line([x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0,
+                x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1], fill=fill, width=width)
 
 
-def painter(key):
-    def register(fn):
-        PAINTERS[key] = fn
-        return fn
-    return register
+def burst(d, cx, cy, r, fill):
+    import math
+    pts = []
+    for i in range(16):
+        ang = i * math.pi / 8
+        rr = r if i % 2 == 0 else r * 0.45
+        pts.append((cx + rr * math.cos(ang), cy + rr * math.sin(ang)))
+    d.polygon(pts, fill=fill)
 
 
-def _skyline(d, x, y, w, h, sky, tower, heights):
-    """A row of dark towers against a flat sky — shared night backdrop."""
-    d.rectangle([x, y, x + w, y + h], fill=sky)
-    for i, frac in enumerate(heights):
-        bx = x + int(w * (0.02 + 0.14 * i))
-        bw = int(w * 0.12)
-        d.rectangle([bx, y + h - int(h * frac), bx + bw, y + h], fill=tower)
+def scene_gulf(d, x, y, w, h):
+    for i in range(h - 22):
+        t = i / max(h - 23, 1)
+        d.line([x, y + i, x + w, y + i],
+               fill=(13 + int(14 * t), 32 + int(22 * t), 52 + int(26 * t)))
+    d.rectangle([x, y + h - 22, x + w, y + h], fill=(16, 52, 66))
+    for sx, sy in [(30, 12), (90, 7), (150, 15), (230, 9), (285, 18), (60, 20)]:
+        d.ellipse([x + sx, y + sy, x + sx + 2, y + sy + 2], fill=(210, 220, 230))
+    # two radar dishes on masts
+    for rx in (52, 128):
+        d.line([x + rx, y + h - 22, x + rx, y + 26], fill=(190, 198, 205), width=3)
+        d.pieslice([x + rx - 17, y + 8, x + rx + 17, y + 40], start=300, end=120,
+                   fill=(215, 222, 228))
+        d.line([x + rx, y + 24, x + rx + 22, y + 12], fill=(215, 222, 228), width=2)
+    dashed(d, (x + w - 8, y + 4), (x + 140, y + 30), (240, 120, 110))
+    dashed(d, (x + w - 30, y + 2), (x + 66, y + 34), (240, 170, 120))
+    burst(d, x + 132, y + 30, 11, (245, 190, 60))
+    burst(d, x + 132, y + 30, 6, (235, 90, 40))
+    # tanker silhouette on the sea, right side
+    tx, ty = x + w - 118, y + h - 20
+    d.polygon([(tx, ty), (tx + 96, ty), (tx + 86, ty + 9), (tx + 10, ty + 9)],
+              fill=(8, 14, 20))
+    d.rectangle([tx + 62, ty - 9, tx + 80, ty], fill=(8, 14, 20))
+    d.rectangle([tx + 14, ty - 5, tx + 52, ty], fill=(8, 14, 20))
+    chip(d, x + 8, y + h - 44, "2 PATRIOT RADARS · IRGC CLAIM", AB(10), RED)
+    caption_band(d, x, y + h, w, "BAHRAIN · KUWAIT · STRAIT OF HORMUZ")
 
 
-def _burst(d, cx, cy, radii, squash, color, width):
-    """Radial flash: one line per radius, angles spread over the circle,
-    vertical reach squashed by `squash` so the burst sits flat."""
-    count = len(radii)
-    for k, r in enumerate(radii):
-        a = 2 * math.pi * k / count
-        d.line([cx, cy, cx + r * math.cos(a), cy + r * squash * math.sin(a)],
-               fill=color, width=width)
-
-
-@painter("gulf")
-def paint_gulf(d, x, y, w, h):
-    _skyline(d, x, y, w, h, (52, 54, 74), (26, 27, 38),
-             (0.34, 0.48, 0.28, 0.42, 0.32, 0.52, 0.30))
-    cx, cy = x + int(w * 0.60), y + int(h * 0.34)
-    radii = [int(h * (0.30 if k % 2 == 0 else 0.16)) for k in range(12)]
-    _burst(d, cx, cy, radii, 0.72, (255, 170, 60), 2)
-    d.ellipse([cx - int(h * 0.13), cy - int(h * 0.10), cx + int(h * 0.13), cy + int(h * 0.10)], fill=(255, 196, 84))
-
-
-@painter("intercept")
-def paint_intercept(d, x, y, w, h):
-    _skyline(d, x, y, w, h, (26, 30, 52), (12, 14, 26),
-             (0.30, 0.44, 0.26, 0.38, 0.30, 0.48, 0.28))
-    for fx, fy in ((0.30, 0.30), (0.58, 0.22), (0.80, 0.36)):
-        cx, cy = x + int(w * fx), y + int(h * fy)
-        _burst(d, cx, cy, [int(h * 0.13)] * 8, 0.8, (255, 190, 90), 1)
-        d.ellipse([cx - 3, cy - 3, cx + 3, cy + 3], fill=(255, 220, 140))
-
-
-@painter("cop")
-def paint_cop(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(86, 128, 156))
-    gx, gy, gr = x + int(w * 0.30), y + int(h * 0.48), int(h * 0.34)
-    d.ellipse([gx - gr, gy - gr, gx + gr, gy + gr], fill=(70, 130, 90))
-    d.ellipse([gx - gr * 0.55, gy - gr * 0.5, gx - gr * 0.05, gy - gr * 0.05], fill=(120, 160, 90))
-    d.ellipse([gx + gr * 0.1, gy + gr * 0.05, gx + gr * 0.6, gy + gr * 0.55], fill=(120, 160, 90))
-    tx = x + int(w * 0.68)
-    thermo_w = max(5, int(w * 0.05))
-    d.rectangle([tx, y + int(h * 0.14), tx + thermo_w, y + int(h * 0.66)], outline=(240, 240, 240), width=2)
-    d.rectangle([tx + 1, y + int(h * 0.40), tx + thermo_w - 1, y + int(h * 0.66)], fill=(220, 70, 50))
-    d.ellipse([tx - 3, y + int(h * 0.62), tx + thermo_w + 3, y + int(h * 0.62) + thermo_w + 6], fill=(220, 70, 50))
-
-
-@painter("quake")
-def paint_quake(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(240, 232, 210))
-    for i in range(1, 4):
-        gy = y + int(h * i / 4)
-        d.line([x + 3, gy, x + w - 3, gy], fill=(210, 200, 175), width=1)
-    pts = [(0.04, 0.50), (0.18, 0.50), (0.28, 0.18), (0.38, 0.82), (0.48, 0.30), (0.58, 0.70), (0.68, 0.50), (0.96, 0.50)]
-    xy = [(x + int(w * fx), y + int(h * fy)) for fx, fy in pts]
-    d.line(xy, fill=(176, 58, 46), width=2)
-    d.line([x + int(w * 0.28), y, x + int(w * 0.28), y + h], fill=(176, 58, 46), width=1)
-
-
-@painter("cricket")
-def paint_cricket(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(92, 142, 82))
-    d.rectangle([x + int(w * 0.28), y, x + int(w * 0.72), y + h], fill=(198, 172, 112))
-    sx = x + int(w * 0.60)
-    for i in range(3):
-        d.line([sx + i * 4 - 4, y + int(h * 0.30), sx + i * 4 - 4, y + int(h * 0.72)], fill=(240, 230, 190), width=2)
-    d.polygon([(x + int(w * 0.10), y + int(h * 0.78)), (x + int(w * 0.20), y + int(h * 0.74)), (x + int(w * 0.34), y + int(h * 0.30)), (x + int(w * 0.28), y + int(h * 0.26))], fill=(214, 178, 120))
-    bx, by = x + int(w * 0.82), y + int(h * 0.34)
-    d.ellipse([bx - 4, by - 4, bx + 4, by + 4], fill=(196, 40, 44))
-
-
-@painter("f1")
-def paint_f1(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(16, 20, 34))
-    d.rectangle([x, y + int(h * 0.55), x + w, y + h], fill=(40, 44, 56))
-    for i in range(5):  # start-gantry lights
-        lx = x + int(w * (0.15 + 0.18 * i))
-        d.ellipse([lx - 3, y + int(h * 0.16) - 3, lx + 3, y + int(h * 0.16) + 3], fill=(250, 60, 60) if i < 4 else (250, 220, 90))
-    cx, cy = x + int(w * 0.50), y + int(h * 0.62)
-    d.rectangle([cx - int(w * 0.30), cy - int(h * 0.10), cx + int(w * 0.30), cy + int(h * 0.08)], fill=(196, 40, 44))
-    d.rectangle([cx - int(w * 0.10), cy - int(h * 0.26), cx + int(w * 0.12), cy - int(h * 0.08)], fill=(120, 20, 30))
-    for wx in (cx - int(w * 0.22), cx + int(w * 0.22)):
-        d.ellipse([wx - 5, cy + int(h * 0.02), wx + 5, cy + int(h * 0.14)], fill=(10, 10, 12))
-
-
-@painter("rocket")
-def paint_rocket(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(8, 14, 30))
-    stars = random.Random(22)
-    for _ in range(30):
-        sx = x + stars.randint(2, max(2, int(w) - 3))
-        sy = y + stars.randint(2, max(2, int(h) - 3))
-        d.ellipse([sx, sy, sx + 1.4, sy + 1.4], fill=(230, 234, 244))
+def scene_cop31(d, x, y, w, h):
+    for i in range(h):
+        t = i / max(h - 1, 1)
+        d.line([x, y + i, x + w, y + i],
+               fill=(38 + int(20 * t), 74 + int(16 * t), 82 + int(10 * t)))
+    # hall: pediment + columns
     cx = x + w // 2
-    d.rectangle([cx - 6, y + int(h * 0.18), cx + 6, y + int(h * 0.62)], fill=(226, 228, 232))
-    d.polygon([(cx - 6, y + int(h * 0.18)), (cx + 6, y + int(h * 0.18)), (cx, y + int(h * 0.04))], fill=(196, 40, 44))
-    d.polygon([(cx - 6, y + int(h * 0.55)), (cx - 14, y + int(h * 0.68)), (cx - 6, y + int(h * 0.68))], fill=(52, 84, 168))
-    d.polygon([(cx + 6, y + int(h * 0.55)), (cx + 14, y + int(h * 0.68)), (cx + 6, y + int(h * 0.68))], fill=(52, 84, 168))
-    d.polygon([(cx - 4, y + int(h * 0.68)), (cx + 4, y + int(h * 0.68)), (cx + 8, y + h - 2), (cx - 8, y + h - 2)], fill=(255, 170, 60))
+    d.polygon([(cx - 105, y + 26), (cx + 105, y + 26), (cx, y + 6)],
+              fill=(226, 216, 188))
+    d.rectangle([x + 18, y + 28, x + w - 18, y + 33], fill=(226, 216, 188))
+    for i in range(6):
+        cxx = x + 34 + i * 48
+        d.rectangle([cxx, y + 35, cxx + 12, y + h - 30], fill=(214, 203, 172))
+    # big screen
+    d.rectangle([cx - 44, y + 38, cx + 44, y + 64], fill=(16, 34, 52))
+    text(d, (cx, y + 44), "COP31", AB(15), (240, 235, 210), anchor="ma")
+    text(d, (cx, y + 80), "ANTALYA", AB(9), (240, 235, 210), anchor="ma")
+    # delegate table arc + heads
+    d.pieslice([cx - 120, y + h - 52, cx + 120, y + h + 6], start=180, end=360,
+               fill=(24, 44, 58))
+    for i in range(7):
+        hx = cx - 90 + i * 30
+        d.ellipse([hx - 5, y + h - 34, hx + 5, y + h - 24], fill=(232, 200, 160))
+    # small flags
+    for i, col in enumerate([(200, 60, 50), (240, 200, 60), (70, 130, 200),
+                             (240, 240, 240), (60, 160, 90)]):
+        fx = x + 14 + i * 16
+        d.line([fx, y + 8, fx, y + 24], fill=(220, 220, 220), width=1)
+        d.rectangle([fx, y + 8, fx + 11, y + 15], fill=col)
+    chip(d, x + 8, y + h - 44, "FINAL TEXT · PLENARY 06:00 GMT", AB(10), RED)
+    caption_band(d, x, y + h, w, "ANTALYA · TÜRKIYE · CLIMATE SUMMIT")
 
 
-@painter("football")
-def paint_football(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(46, 120, 60))
-    for i in range(4):
-        d.line([x, y + int(h * (0.2 + 0.2 * i)), x + w, y + int(h * (0.2 + 0.2 * i))], fill=(70, 150, 84), width=2)
-    d.ellipse([x + int(w * 0.30), y + int(h * 0.25), x + int(w * 0.70), y + int(h * 0.75)], outline=(240, 240, 240), width=2)
-    bx, by = x + int(w * 0.50), y + int(h * 0.50)
-    d.ellipse([bx - 5, by - 5, bx + 5, by + 5], fill=(250, 250, 250), outline=(30, 30, 30))
+def scene_cricket(d, x, y, w, h):
+    for i in range(26):
+        t = i / 25
+        d.line([x, y + i, x + w, y + i],
+               fill=(168 + int(30 * t), 200 + int(24 * t), 190 + int(20 * t)))
+    d.rectangle([x, y + 26, x + w, y + h], fill=(58, 128, 62))
+    d.rectangle([x, y + 44, x + w, y + 48], fill=(76, 148, 78))
+    d.rectangle([x, y + 66, x + w, y + 70], fill=(76, 148, 78))
+    # sightscreen
+    d.rectangle([x + w - 74, y + 14, x + w - 14, y + 44], fill=(245, 244, 238))
+    # pitch trapezoid
+    cx = x + w // 2
+    d.polygon([(cx - 16, y + h), (cx + 16, y + h), (cx + 7, y + 30),
+               (cx - 7, y + 30)], fill=(216, 196, 148))
+    for sx in (cx - 5, cx + 3):
+        d.rectangle([sx, y + 33, sx + 2, y + 43], fill=(240, 205, 60))
+    # batsman silhouette (foreground, left of pitch)
+    bx, by = cx - 52, y + h - 30
+    d.ellipse([bx - 6, by - 34, bx + 6, by - 22], fill=(24, 30, 40))
+    d.line([bx, by - 22, bx - 4, by - 6], fill=(24, 30, 40), width=5)
+    d.line([bx - 4, by - 6, bx - 12, by + 8], fill=(24, 30, 40), width=4)
+    d.line([bx - 4, by - 6, bx + 8, by + 8], fill=(24, 30, 40), width=4)
+    d.line([bx - 1, by - 18, bx + 16, by - 26], fill=(24, 30, 40), width=4)
+    d.line([bx + 16, by - 26, bx + 30, by - 6], fill=(120, 84, 40), width=4)
+    # ball with seam arc
+    d.ellipse([cx + 58, y + 34, cx + 70, y + 46], fill=(178, 32, 42))
+    d.arc([cx + 60, y + 35, cx + 68, y + 45], start=300, end=120,
+          fill=(245, 240, 230), width=1)
+    chip(d, x + 8, y + h - 44, "720/9 DEC · LEAD 352", AB(10), NAVY)
+    caption_band(d, x, y + h, w, "BASIN RESERVE · WELLINGTON · DAY 4")
 
 
-@painter("tennis")
-def paint_tennis(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(40, 90, 160))
-    d.rectangle([x + int(w * 0.12), y + int(h * 0.12), x + int(w * 0.88), y + int(h * 0.88)], outline=(240, 240, 240), width=2)
-    d.line([x + int(w * 0.12), y + h // 2, x + int(w * 0.88), y + h // 2], fill=(240, 240, 240), width=1)
-    bx, by = x + int(w * 0.72), y + int(h * 0.30)
-    d.ellipse([bx - 4, by - 4, bx + 4, by + 4], fill=(200, 230, 60))
+LEAD_SCENES = {"gulf": scene_gulf, "cop31": scene_cop31, "cricket": scene_cricket}
 
 
-@painter("golf")
-def paint_golf(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(120, 180, 110))
-    d.ellipse([x + int(w * 0.55), y + int(h * 0.45), x + int(w * 0.95), y + int(h * 0.85)], fill=(90, 160, 90))
-    fx = x + int(w * 0.75)
-    d.line([fx, y + int(h * 0.20), fx, y + int(h * 0.62)], fill=(240, 240, 240), width=2)
-    d.polygon([(fx, y + int(h * 0.20)), (fx + int(w * 0.16), y + int(h * 0.28)), (fx, y + int(h * 0.36))], fill=(196, 40, 44))
-    d.ellipse([x + int(w * 0.20) - 3, y + int(h * 0.70) - 3, x + int(w * 0.20) + 3, y + int(h * 0.70) + 3], fill=(250, 250, 250))
+# ------------------------------------------------------------- mini strips
+def mini_strip(d, x, y, w, h, kind, label):
+    if kind == "houthi":
+        d.rectangle([x, y, x + w, y + h], fill=(18, 34, 54))
+        dashed(d, (x + 8, y + h - 6), (x + 96, y + 8), (240, 170, 120), width=2)
+        burst(d, x + 104, y + 10, 8, (245, 190, 60))
+        d.rectangle([x + 128, y + h - 12, x + w - 6, y + h - 5], fill=(30, 60, 84))
+    elif kind == "quake":
+        d.rectangle([x, y, x + w, y + h], fill=(250, 246, 232))
+        pts, mid = [], y + h // 2
+        import math
+        for i in range(46):
+            amp = 2 + 11 * abs(math.sin(i * 0.55)) * (0.4 + 0.6 * abs(math.sin(i * 0.13)))
+            pts.append((x + 6 + i * 3.4, mid + (amp if i % 2 else -amp)))
+        d.line(pts, fill=RED, width=2)
+    elif kind == "f1":
+        d.rectangle([x, y, x + w, y + h], fill=(24, 24, 30))
+        d.arc([x + 6, y + 4, x + 130, y + h + 16], start=180, end=330,
+              fill=(230, 230, 230), width=3)
+        d.polygon([(x + 118, y + 12), (x + 148, y + 12), (x + 154, y + 20),
+                   (x + 124, y + 20)], fill=RED)
+        d.rectangle([x + 128, y + 8, x + 138, y + 12], fill=(200, 200, 200))
+    elif kind == "rocket":
+        d.rectangle([x, y, x + w, y + h], fill=(20, 38, 66))
+        rx = x + 30
+        d.polygon([(rx, y + 4), (rx + 7, y + 12), (rx - 7, y + 12)], fill=WHITE)
+        d.rectangle([rx - 7, y + 12, rx + 7, y + h - 8], fill=WHITE)
+        d.polygon([(rx - 7, y + h - 12), (rx - 14, y + h - 4), (rx - 7, y + h - 4)],
+                  fill=RED)
+        d.polygon([(rx + 7, y + h - 12), (rx + 14, y + h - 4), (rx + 7, y + h - 4)],
+                  fill=RED)
+        burst(d, rx, y + h - 3, 6, (245, 170, 60))
+    elif kind == "football":
+        d.rectangle([x, y, x + w, y + h], fill=(52, 118, 58))
+        d.rectangle([x + 5, y + 4, x + w - 5, y + h - 4], outline=(240, 244, 238), width=1)
+        d.line([x + w // 2, y + 4, x + w // 2, y + h - 4], fill=(240, 244, 238), width=1)
+        d.ellipse([x + w // 2 - 9, y + h // 2 - 9, x + w // 2 + 9, y + h // 2 + 9],
+                  outline=(240, 244, 238), width=1)
+        d.ellipse([x + w // 2 + 22, y + h // 2 - 4, x + w // 2 + 30, y + h // 2 + 4],
+                  fill=(245, 245, 245))
+    elif kind == "tennis":
+        d.rectangle([x, y, x + w, y + h], fill=(44, 96, 128))
+        d.rectangle([x + 8, y + 5, x + 120, y + h - 5], outline=(240, 244, 238), width=1)
+        d.line([x + 64, y + 5, x + 64, y + h - 5], fill=(20, 20, 20), width=3)
+        d.line([x + 8, y + h // 2, x + 120, y + h // 2], fill=(240, 244, 238), width=1)
+        d.ellipse([x + 96, y + 8, x + 104, y + 16], fill=(210, 220, 60))
+    elif kind == "golf":
+        d.rectangle([x, y, x + w, y + h], fill=(66, 138, 70))
+        d.ellipse([x + 10, y + h - 12, x + 120, y + h - 2], fill=(86, 158, 88))
+        fx = x + 148
+        d.line([fx, y + 6, fx, y + h - 6], fill=WHITE, width=2)
+        d.polygon([(fx, y + 6), (fx + 13, y + 10), (fx, y + 14)], fill=RED)
+        d.ellipse([fx - 5, y + h - 8, fx + 5, y + h - 3], fill=(30, 30, 30))
+    elif kind == "sumo":
+        d.rectangle([x, y, x + w, y + h], fill=(206, 178, 128))
+        d.ellipse([x + 52, y + 3, x + 118, y + h - 3], outline=(250, 248, 240), width=3)
+        d.ellipse([x + 72, y + 12, x + 86, y + 26], fill=(52, 44, 40))
+        d.ellipse([x + 86, y + 12, x + 100, y + 26], fill=(70, 58, 52))
+    elif kind == "rsm":
+        d.rectangle([x, y, x + w, y + h], fill=(250, 246, 232))
+        for i in range(3):
+            bx = x + 14 + i * 26
+            d.rectangle([bx, y + 10, bx + 16, y + h - 4], fill=(47, 93, 138))
+            text(d, (bx + 8, y + 1), "-9", AB(9), INK, anchor="ma")
+    elif kind == "nfl":
+        d.rectangle([x, y, x + w, y + h], fill=(46, 104, 54))
+        for i in range(6):
+            lx = x + 12 + i * 26
+            d.line([lx, y + 4, lx, y + h - 4], fill=(240, 244, 238), width=1)
+        d.ellipse([x + w // 2 - 12, y + h // 2 - 6, x + w // 2 + 12, y + h // 2 + 6],
+                  fill=(150, 92, 44))
+    # in-strip data label (>=9px) bottom-left, with dark backing if needed
+    f = AB(10)
+    lw = int(tw(d, label, f)) + 10
+    d.rectangle([x + 4, y + h - 15, x + 4 + lw, y + h - 2], fill=(10, 14, 20))
+    text(d, (x + 9, y + h - 13), label, f, WHITE)
 
 
-@painter("sumo")
-def paint_sumo(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(196, 164, 108))
-    cx, cy = x + w // 2, y + int(h * 0.55)
-    d.ellipse([cx - int(w * 0.34), cy - int(h * 0.28), cx + int(w * 0.34), cy + int(h * 0.28)], fill=(140, 110, 60))
-    d.ellipse([cx - int(w * 0.28), cy - int(h * 0.20), cx + int(w * 0.28), cy + int(h * 0.20)], fill=(168, 134, 76))
-    d.ellipse([cx - int(w * 0.16), cy - int(h * 0.30), cx - int(w * 0.06), cy - int(h * 0.20)], fill=(60, 40, 30))
-    d.ellipse([cx + int(w * 0.06), cy - int(h * 0.30), cx + int(w * 0.16), cy - int(h * 0.20)], fill=(60, 40, 30))
+# ------------------------------------------------------------------- map
+def draw_map(d, x, y, w, h):
+    from mapdata import WORLD
+    d.rectangle([x, y, x + w, y + h], fill=(24, 58, 44))
+    text(d, (x + 10, y + 7), "WHERE IT HAPPENED", AB(12), (240, 238, 220))
+    mx0, my0, mw, mh = x + 8, y + 26, w - 16, h - 52
+
+    def proj(lon, lat):
+        lat = max(-60.0, min(85.0, lat))
+        return (mx0 + (lon + 180.0) / 360.0 * mw,
+                my0 + (85.0 - lat) / 145.0 * mh)
+
+    land = (122, 168, 116)
+    for polys in WORLD.values():
+        for poly in polys.split("|"):
+            pts = []
+            for pair in poly.split(","):
+                if ":" not in pair:
+                    continue
+                lo, la = pair.split(":")
+                pts.append(proj(float(lo), float(la)))
+            if len(pts) >= 3:
+                d.polygon(pts, fill=land)
+    for lon, lat in DOTS:
+        px, py = proj(lon, lat)
+        d.ellipse([px - 2.5, py - 2.5, px + 2.5, py + 2.5], fill=(210, 205, 170))
+    for num, (lon, lat) in PINS.items():
+        px, py = proj(lon, lat)
+        col = (250, 248, 240)
+        d.ellipse([px - 9, py - 9, px + 9, py + 9], fill=RED, outline=col, width=1)
+        text(d, (px, py - 5), str(num), AB(10), WHITE, anchor="ma")
+    text(d, (x + 10, y + h - 20),
+         "Numbered pins = the 13 pictured cards · small dots = the briefs",
+         AM(10), (235, 232, 210))
 
 
-@painter("golf2")
-def paint_golf2(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(90, 130, 120))
-    d.rectangle([x, y + int(h * 0.60), x + w, y + h], fill=(70, 110, 90))
-    for i in range(3):  # rain streaks over a washed-out course
-        rx = x + int(w * (0.2 + 0.3 * i))
-        d.line([rx, y + int(h * 0.15), rx - 4, y + int(h * 0.35)], fill=(200, 220, 235), width=1)
-    fx = x + int(w * 0.60)
-    d.line([fx, y + int(h * 0.30), fx, y + int(h * 0.70)], fill=(240, 240, 240), width=2)
-    d.polygon([(fx, y + int(h * 0.30)), (fx + int(w * 0.14), y + int(h * 0.38)), (fx, y + int(h * 0.46))], fill=(240, 200, 40))
+# ------------------------------------------------------------------ main
+def build():
+    img = Image.new("RGB", (W, H), CREAM)
+    d = ImageDraw.Draw(img)
+    M = 12  # page margin
+    CW = W - 2 * M
 
+    # --- thin paper-name bar (text 12px <= 20px) ---
+    d.rectangle([0, 0, W, 24], fill=NAVY)
+    text(d, (M, 5), "THE DAILY ATLAS · THE WORLD IN ONE DAY", AB(12), WHITE)
+    r = "40 STORIES · 7 REGIONS · EVERY ONE FROM TODAY"
+    text(d, (W - M, 5), r, AB(12), WHITE, anchor="ra")
 
-@painter("nfl")
-def paint_nfl(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(46, 110, 60))
-    for i in range(5):
-        lx = x + int(w * (0.15 + 0.18 * i))
-        d.line([lx, y + 4, lx, y + h - 4], fill=(240, 240, 240), width=1)
-    cx, cy = x + int(w * 0.50), y + int(h * 0.50)
-    d.ellipse([cx - int(w * 0.14), cy - int(h * 0.14), cx + int(w * 0.14), cy + int(h * 0.14)], fill=(120, 70, 40), outline=(250, 250, 250))
-    d.line([cx - int(w * 0.08), cy, cx + int(w * 0.08), cy], fill=(250, 250, 250), width=1)
+    # --- R1: the DATE is the masthead (own layer, scaled to fit) ---
+    date_s = "SUNDAY 22 NOVEMBER 2026"
+    nat = Image.new("RGBA", (1750, 160), (0, 0, 0, 0))
+    ImageDraw.Draw(nat).text((6, 6), date_s, font=PF(118), fill=INK + (255,))
+    nb = nat.getbbox()
+    layer = nat.crop(nb).resize((958, 88), Image.LANCZOS)
+    ink_w, ink_h = layer.size
+    mast_y = 28
+    img.paste(layer, (M + (CW - ink_w) // 2, mast_y), layer)
+    d = ImageDraw.Draw(img)
+    print(f"MASTHEAD date ink box: {ink_w}w x {ink_h}h px "
+          f"(Playfair 118 layer scaled to fit)")
+    sub_y = mast_y + 112
+    text(d, (W // 2, sub_y),
+         "Gulf claims overnight · COP31 text tabled in Antalya · "
+         "India declare at 720 in Wellington", AM(13), GREY, anchor="ma")
 
+    # --- timeline (6 slots) + R2 numbers strip, inside top 22% (y<225) ---
+    tl_y = 156
+    colw = CW // 6
+    for i, (t, ev) in enumerate(TIMELINE):
+        cx = M + i * colw
+        text(d, (cx + 2, tl_y), t, AB(11), NAVY)
+        for j, ln in enumerate(wrap(d, ev, AM(10), colw - 8)):
+            text(d, (cx + 2, tl_y + 14 + j * 12), ln, AM(10), INK)
+        if i:
+            d.line([cx - 4, tl_y, cx - 4, tl_y + 38], fill=(190, 180, 155), width=1)
+    ns_y = 206
+    d.line([M, ns_y - 6, W - M, ns_y - 6], fill=RED, width=2)
+    nw = CW // 6
+    digit_ink = None
+    for i, (num, cap) in enumerate(NUMBERS):
+        cx = M + i * nw
+        text(d, (cx + 2, ns_y), num, AB(50), RED)
+        if digit_ink is None:
+            tmp = Image.new("L", (300, 90), 0)
+            ImageDraw.Draw(tmp).text((4, 2), "720/9", font=AB(50), fill=255)
+            bb = tmp.getbbox()
+            digit_ink = bb[3] - bb[1]
+        for j, ln in enumerate(wrap(d, cap, AB(8), nw - 8)):
+            text(d, (cx + 2, ns_y + 54 + j * 10), ln, AB(8), INK)
+    print(f"NUMBERS strip: 6 numbers, digit ink height {digit_ink}px "
+          f"(font 50), strip top y={ns_y}")
 
-# ------------------------------------------------------------------- layouts
-# The duel layouts. A (flat) won the account's duel and produces the
-# committed entry.png; B (layered shadows) is the appeal backup and
-# C (compact grid) the third variant. Only geometry differs.
-LAYOUTS = {
-    "A": dict(label="A - 2D FLAT", shadow=0, lead_ids=[1, 3, 5],
-              hook="GULF HIT OVERNIGHT  -  COP31 FINAL TEXT IN ANTALYA  -  INDIA 720/9, A RECORD",
-              lead_strip=48, small_strip=30),
-    "B": dict(label="B - 3D LAYERED", shadow=5, lead_ids=[1, 3, 5],
-              hook="GULF HIT OVERNIGHT  -  COP31 FINAL TEXT IN ANTALYA  -  INDIA 720/9, A RECORD",
-              lead_strip=52, small_strip=32),
-    "C": dict(label="C - 2D COMPACT GRID", shadow=0, lead_ids=[],
-              hook="INDIA 720/9, A RECORD  -  GULF HIT OVERNIGHT  -  COP31 FINAL TEXT IN ANTALYA",
-              lead_strip=36, small_strip=36),
-}
+    # --- R3: three lead cards, pictorial scenes 92px ---
+    lead_y, lead_h, scene_h = 284, 214, 92
+    lw3 = (CW - 16) // 3
+    for i, c in enumerate(LEADS):
+        cx = M + i * (lw3 + 8)
+        LEAD_SCENES[c["scene"]](d, cx, lead_y, lw3, scene_h)
+        source_pill(d, cx, lead_y, lw3, c["tag"])
+        d.rectangle([cx, lead_y, cx + lw3, lead_y + 3],
+                    fill=REGIONS[c["region"]])
+        ky = lead_y + scene_h + 5
+        text(d, (cx, ky), f"{c['num']}  {c['region']} · {c['topic']}",
+             AB(11), REGIONS[c["region"]])
+        hy = ky + 15
+        for ln in wrap(d, c["headline"], PF(19), lw3 - 2)[:2]:
+            text(d, (cx, hy), ln, PF(19), INK)
+            hy += 23
+        dy = hy + 2
+        for ln in wrap(d, c["deck"], AM(12), lw3 - 2)[:4]:
+            text(d, (cx, dy), ln, AM(12), INK)
+            dy += 15
+        d.line([cx, lead_y + lead_h, cx + lw3, lead_y + lead_h],
+               fill=(200, 190, 165), width=1)
+    print(f"LEAD scenes: 3 x {scene_h}px tall (strips at y={lead_y})")
 
+    # --- mini cards 4-13, two rows of five, strip 36px each (R4/R5) ---
+    rows_y = [508, 652]
+    mw5 = (CW - 32) // 5
+    for r_i, row in enumerate([MINIS[:5], MINIS[5:]]):
+        ry = rows_y[r_i]
+        for i, c in enumerate(row):
+            cx = M + i * (mw5 + 8)
+            mini_strip(d, cx, ry, mw5, 36, c["strip"], c["label"])
+            source_pill(d, cx, ry, mw5, c["tag"])
+            d.rectangle([cx, ry, cx + mw5, ry + 3], fill=REGIONS[c["region"]])
+            ky = ry + 40
+            text(d, (cx, ky), f"{c['num']}  {c['region']} · {c['topic']}",
+                 AB(10), REGIONS[c["region"]])
+            hy = ky + 13
+            for ln in wrap(d, c["headline"], PF(15), mw5 - 2)[:2]:
+                text(d, (cx, hy), ln, PF(15), INK)
+                hy += 18
+            dy = hy + 1
+            for ln in wrap(d, c["deck"], AM(12), mw5 - 2)[:3]:
+                text(d, (cx, dy), ln, AM(12), INK)
+                dy += 15
+            d.line([cx, ry + 140, cx + mw5, ry + 140],
+                   fill=(200, 190, 165), width=1)
 
-class Atlas:
-    """One newspaper page, painted section by section onto a canvas."""
+    # --- bottom zone: map (left, 204px = 19.9% of page) + ALSO ON ---
+    bot_y, bot_h = 800, 168
+    draw_map(d, M, bot_y, 452, bot_h)
+    bx = M + 464
+    bw = W - M - bx
+    text(d, (bx, bot_y + 2), "ALSO ON SUNDAY 22 NOVEMBER — 27 MORE STORIES",
+         AB(12), NAVY)
+    d.line([bx, bot_y + 18, W - M, bot_y + 18], fill=NAVY, width=1)
+    col_w = bw // 2
+    for i, b in enumerate(BRIEFS):
+        col = 0 if i < 14 else 1
+        row = i if i < 14 else i - 14
+        by = bot_y + 24 + row * 11
+        cx = bx + col * col_w
+        text(d, (cx, by), str(14 + i), AB(10), RED)
+        for j, ln in enumerate(wrap(d, b, AM(10), col_w - 26)[:1]):
+            text(d, (cx + 22, by), ln, AM(10), INK)
 
-    def __init__(self, layout):
-        self.layout = layout
-        self.img = Image.new("RGB", (SIDE, SIDE), CREAM)
-        self.d = ImageDraw.Draw(self.img)
+    # --- DATE CHECK (red) + footer ---
+    dc_y = 976
+    d.rectangle([M, dc_y, W - M, dc_y + 26], outline=RED, width=2)
+    text(d, (M + 8, dc_y + 7), "DATE CHECK", AB(11), RED)
+    for j, ln in enumerate(wrap(d, DATECHECK, AM(10), CW - 130)[:2]):
+        text(d, (M + 108, dc_y + 3 + j * 11), ln, AM(10), INK)
+    text(d, (M, dc_y + 32),
+         "Every story happened, or was first reported, on Sunday 22 November "
+         "2026. Contested claims are attributed.", AM(9), GREY)
+    r = "Sources named beside each story · Original drawings"
+    text(d, (W - M, dc_y + 32), r, AM(9), GREY, anchor="ra")
 
-    # -- a single pictured story -------------------------------------------
-    def strip(self, card, x, y, w, h, lead=False):
-        d = self.d
-        lay = self.layout
-        if lay["shadow"]:
-            d.rectangle([x + 3, y + 3, x + w + 3, y + h + 3], fill=(200, 190, 160))
-            d.rectangle([x, y, x + w, y + 2], fill=(255, 255, 255))
-        PAINTERS[card["scene"]](d, x, y, w, h)
-        d.rectangle([x, y, x + w, y + 3], fill=REGION_TINT[card["region"]])
-        band_h = 16 if lead else 12
-        d.rectangle([x, y + h - band_h, x + w, y + h], fill=BODY)
-        cap_font = shrink_to_fit(d, card["caption"], 10 if lead else 9, w - 10)
-        centred(d, x + w / 2, y + h - band_h + (1 if lead else 0),
-                card["caption"], cap_font, CREAM)
-        if lead:
-            self._tag_chip(card["tag"], bold(10), x, y, w, top=5, height=14)
-            self._label_chip(card, x, y + h - band_h - 18, w, big=True)
-        else:
-            # small strip: source tag top-right, label chip top-left;
-            # the label's width budget leaves room so they never meet.
-            tag_w = self._tag_chip(card["stag"], bold(9), x, y, w, top=2, height=13)
-            self._label_chip(card, x, y + 2, w, big=False, budget=w - tag_w - 20)
+    # --- palette compress + save ---
+    q = img.quantize(colors=256, method=Image.MEDIANCUT, dither=Image.NONE)
+    out = os.path.join(HERE, "entry.png")
+    q.save(out, optimize=True)
+    sz = os.path.getsize(out)
+    if sz > 160 * 1024:
+        q = img.quantize(colors=192, method=Image.MEDIANCUT, dither=Image.NONE)
+        q.save(out, optimize=True)
+        sz = os.path.getsize(out)
+    img.resize((300, 300), Image.LANCZOS).save(
+        os.path.join(HERE, "entry-300.png"))
+    print(f"entry.png bytes: {sz}")
 
-    def _tag_chip(self, text, font, x, y, w, top, height):
-        d = self.d
-        tag_w = text_w(d, text, font) + 8
-        d.rectangle([x + w - tag_w - 3, y + top, x + w - 3, y + top + height], fill=BODY)
-        d.text((x + w - tag_w + 1, y + top + 1), text, font=font, fill=CREAM)
-        return tag_w
-
-    def _label_chip(self, card, x, ly, w, big, budget=None):
-        d = self.d
-        lab_font = shrink_to_fit(d, card["label"], 12 if big else 10,
-                                 (w - 12) if big else budget)
-        lab_w = text_w(d, card["label"], lab_font) + 9
-        lab_h = 16 if big else 13
-        d.rectangle([x + 3, ly, x + 3 + lab_w, ly + lab_h], fill=WINE)
-        d.text((x + 7, ly + 2), card["label"], font=lab_font, fill=(255, 255, 255))
-
-    def card(self, card, x, y, w, strip_h, lead=False):
-        d = self.d
-        lay = self.layout
-        if lay["shadow"]:
-            off = lay["shadow"]
-            d.rectangle([x + off, y + off, x + w + off, y + strip_h + 62 + off], fill=DROP)
-        d.rectangle([x, y, x + w, y + strip_h], outline=CARD_EDGE, width=1)
-        self.strip(card, x, y, w, strip_h, lead)
-        ry = y + strip_h + (5 if lead else 3)
-        d.text((x + 1, ry),
-               "%d  %s - %s - %s" % (card["no"], card["place"], card["region"], card["topic"]),
-               font=bold(11 if lead else 9), fill=REGION_TINT[card["region"]])
-        hy = ry + (15 if lead else 12)
-        head_font = display(22 if lead else 14)
-        for ln in wrap_lines(d, card["headline"], head_font, w - 2)[:2]:
-            d.text((x + 1, hy), ln, font=head_font, fill=BODY)
-            hy += 24 if lead else 15
-        for ln in wrap_lines(d, card["deck"], plain(12), w - 2):
-            d.text((x + 1, hy + 1), ln, font=plain(12), fill=DECK_INK)
-            hy += 13 if lead else 12.5
-        return hy
-
-    # -- everything above the cards -----------------------------------------
-    def header(self):
-        d = self.d
-        lay = self.layout
-        d.rectangle([0, 0, SIDE, 24], fill=PINE)
-        d.text((EDGE, 5), "THE WORLD IN ONE DAY  ·  GAZETTEER EDITION", font=bold(12), fill=CREAM)
-        right = "40 STORIES - 7 REGIONS - EVERY ONE DATED SUNDAY 22 NOVEMBER 2026"
-        d.text((SIDE - EDGE - text_w(d, right, bold(11)), 6), right, font=bold(11), fill=CREAM)
-        if lay["shadow"]:
-            d.text((EDGE + 2, 31), "The Daily Atlas", font=display(44), fill=(200, 190, 160))
-        d.text((EDGE, 29), "The Daily Atlas", font=display(44), fill=BODY)
-        date1 = "SUNDAY 22 NOVEMBER 2026"
-        d.text((SIDE - EDGE - text_w(d, date1, bold(14)), 34), date1, font=bold(14), fill=PINE)
-        date2 = "Atlas edition - one page, the whole day"
-        d.text((SIDE - EDGE - text_w(d, date2, plain(11)), 54), date2, font=plain(11), fill=FADED)
-        d.line([EDGE, 78, SIDE - EDGE, 78], fill=WINE, width=3)
-        d.rectangle([EDGE, 84, SIDE - EDGE, 108], fill=WINE)
-        centred(d, SIDE / 2, 90, lay["hook"],
-                shrink_to_fit(d, lay["hook"], 13, SPAN - 24), (255, 255, 255))
-        slot_w = SPAN / 6
-        for i, (lab, ev) in enumerate(DAY_CLOCK):
-            cx = EDGE + i * slot_w
-            if i:
-                d.line([cx, 114, cx, 144], fill=LINERULE, width=1)
-            d.text((cx + 8, 109), lab, font=bold(10), fill=PINE)
-            ey = 120
-            for ln in wrap_lines(d, ev, plain(10), slot_w - 14)[:2]:
-                d.text((cx + 8, ey), ln, font=plain(10), fill=BODY)
-                ey += 11
-        d.line([EDGE, 144, SIDE - EDGE, 144], fill=LINERULE, width=1)
-        d.text((EDGE, 148), "THE DAY IN NUMBERS", font=bold(10), fill=PINE)
-        num_w = SPAN / 6
-        for i, (num, cap) in enumerate(DAY_FIGURES):
-            cx = EDGE + i * num_w
-            centred(d, cx + num_w / 2, 160, num, display(25), WINE)
-            cy = 189
-            for ln in wrap_lines(d, cap, plain(10), num_w - 8)[:2]:
-                centred(d, cx + num_w / 2, cy, ln, plain(10), FADED)
-                cy += 11
-        chip_w = (SPAN - 6 * 6) / 7
-        for i, (name, n) in enumerate(REGION_TALLY):
-            cx = EDGE + i * (chip_w + 6)
-            d.rectangle([cx, 203, cx + chip_w, 221], fill=REGION_TINT[name])
-            centred(d, cx + chip_w / 2, 207, "%s %d" % (name, n), bold(10), (255, 255, 255))
-        d.line([EDGE, 226, SIDE - EDGE, 226], fill=LINERULE, width=1)
-
-    # -- the card block; returns the y where the lower band starts ---------
-    def card_block(self):
-        lay = self.layout
-        by_no = {c["no"]: c for c in STORIES}
-        if lay["lead_ids"]:
-            lead_w = (SPAN - 2 * 12) / 3
-            end = 0
-            for i, no in enumerate(lay["lead_ids"]):
-                end = max(end, self.card(by_no[no], EDGE + i * (lead_w + 12), 230,
-                                         lead_w, lay["lead_strip"], lead=True))
-            fy = end + 6
-            rest = [c for c in STORIES if c["no"] not in lay["lead_ids"]]
-            feat_w = (SPAN - 4 * 10) / 5
-            for r in range(2):
-                end = 0
-                for c in range(5):
-                    end = max(end, self.card(rest[r * 5 + c], EDGE + c * (feat_w + 10),
-                                             fy, feat_w, lay["small_strip"]))
-                fy = end + 6
-            return fy
-        # compact grid: rows of 5 + 5 + 3, every card the same size
-        feat_w = (SPAN - 4 * 10) / 5
-        fy = 230
-        for r in range(3):
-            end = 0
-            for c, card in enumerate(STORIES[r * 5:(r + 1) * 5]):
-                end = max(end, self.card(card, EDGE + c * (feat_w + 10),
-                                         fy, feat_w, lay["small_strip"]))
-            fy = end + 6
-        return fy
-
-    # -- map panel (left) ----------------------------------------------------
-    def map_panel(self, top, bottom=960):
-        d = self.d
-        x0, x1 = EDGE, EDGE + 430
-        d.rectangle([x0, top, x1, bottom], fill=DEEP_SEA)
-        d.text((x0 + 12, top + 7), "WHERE IT HAPPENED", font=bold(12), fill=CREAM)
-        mx0, mx1, my0, my1 = x0 + 10, x1 - 10, top + 28, bottom - 30
-
-        def px(lon):
-            return mx0 + (lon + 180) / 360 * (mx1 - mx0)
-
-        def py(lat):
-            return my0 + (82 - lat) / 140 * (my1 - my0)
-
-        for glon in range(-150, 181, 30):
-            d.line([px(glon), my0, px(glon), my1], fill=(36, 74, 52), width=1)
-        for glat in range(-45, 76, 15):
-            d.line([mx0, py(glat), mx1, py(glat)], fill=(36, 74, 52), width=1)
-        for rings in WORLD.values():
-            for ring in rings.split("|"):
-                pts = []
-                for pair in ring.split(","):
-                    lo, la = pair.split(":")
-                    pts.append((px(float(lo)), py(float(la))))
-                if len(pts) >= 3:
-                    d.polygon(pts, fill=LANDMASS)
-        for _no, _text, region, lon, lat in BRIEF_ROWS:
-            if lon is not None:
-                cx, cy = px(lon), py(lat)
-                d.ellipse([cx - 2.6, cy - 2.6, cx + 2.6, cy + 2.6], fill=REGION_TINT[region])
-        for card in STORIES:
-            if card["lon"] is None:
-                continue
-            cx, cy = px(card["lon"]), py(card["lat"])
-            r = 9
-            d.ellipse([cx - r, cy - r, cx + r, cy + r],
-                      fill=REGION_TINT[card["region"]], outline=CREAM, width=2)
-            s = str(card["no"])
-            f = bold(10)
-            d.text((cx - text_w(d, s, f) / 2, cy - 5), s, font=f, fill=(255, 255, 255))
-        d.text((x0 + 12, bottom - 18), "Pins 1-13 = pictured stories - dots = briefs",
-               font=plain(9), fill=CREAM)
-
-    # -- briefs column (right of the map) ------------------------------------
-    def briefs_column(self, top):
-        d = self.d
-        x = EDGE + 430 + 16
-        w = SIDE - EDGE - x
-        d.text((x, top + 5), "ALSO ON SUNDAY 22 NOVEMBER - 27 MORE STORIES",
-               font=bold(12), fill=PINE)
-        d.line([x, top + 21, SIDE - EDGE, top + 21], fill=PINE, width=1)
-        y0 = top + 26
-        leading = (960 - y0) / len(BRIEF_ROWS)
-        y = y0
-        for no, text, region, _lon, _lat in BRIEF_ROWS:
-            ns = str(no)
-            d.text((x, y), ns, font=bold(9), fill=REGION_TINT[region])
-            off = text_w(d, ns, bold(9)) + 5
-            first = wrap_lines(d, text, plain(9), w - off)[0]  # one line only
-            d.text((x + off, y), first, font=plain(9), fill=BRIEF_INK)
-            y += leading
-        return leading
-
-    # -- date-check band and footers ------------------------------------------
-    def foot_bands(self):
-        d = self.d
-        y0, y1 = 966, 1004
-        d.rectangle([EDGE, y0, SIDE - EDGE, y1], fill=SHEET, outline=WINE, width=2)
-        lab = "DATE CHECK"
-        d.text((EDGE + 8, y0 + 5), lab, font=bold(10), fill=WINE)
-        tx = EDGE + 8 + text_w(d, lab, bold(10)) + 8
-        cur = ""
-        for word in DATE_CHECK.split():
-            trial = (cur + " " + word).strip()
-            if text_w(d, trial, plain(9)) <= (SIDE - EDGE - 8) - tx:
-                cur = trial
-            else:
-                break
-        first = cur
-        remainder = DATE_CHECK[len(first):].strip()
-        d.text((tx, y0 + 5), first, font=plain(9), fill=BODY)
-        yy = y0 + 16
-        for ln in wrap_lines(d, remainder, plain(9), SPAN - 16)[:2]:
-            d.text((EDGE + 8, yy), ln, font=plain(9), fill=BODY)
-            yy += 11
-        d.text((EDGE, 1010), FOOT_LEFT, font=plain(9), fill=FADED)
-        d.text((SIDE - EDGE - text_w(d, FOOT_RIGHT, plain(9)), 1010),
-               FOOT_RIGHT, font=plain(9), fill=FADED)
-
-    # -- whole page -------------------------------------------------------------
-    def render(self, out_path):
-        self.header()
-        lower_top = self.card_block()
-        leading = self.briefs_column(lower_top)
-        self.map_panel(lower_top)
-        self.foot_bands()
-        flat = self.img.quantize(colors=256, method=Image.MEDIANCUT, dither=Image.Dither.NONE)
-        flat.save(out_path, optimize=True)
-        print(self.layout["label"], "lower band starts:", lower_top,
-              "brief leading: %.2f" % leading)
-        print("saved", out_path, os.path.getsize(out_path), "bytes")
-        return lower_top
-
-
-def build(layout_key, out_path):
-    return Atlas(LAYOUTS[layout_key]).render(out_path)
+    cards = LEADS + MINIS
+    ge2 = sum(1 for c in cards if c["facts"] >= 2)
+    avg = sum(c["facts"] for c in cards) / len(cards)
+    print(f"AUDIT cards={len(cards)} ge2facts={ge2} "
+          f"({100.0 * ge2 / len(cards):.0f}%) avg_facts={avg:.2f}")
+    print(f"AUDIT stories total={len(cards) + len(BRIEFS)} "
+          f"briefs={len(BRIEFS)} timeline_slots={len(TIMELINE)} "
+          f"numbers={len(NUMBERS)} datecheck_discards=7 + 1 not-yet")
 
 
 if __name__ == "__main__":
-    build("A", os.path.join(BASE, "entry.png"))
+    build()
