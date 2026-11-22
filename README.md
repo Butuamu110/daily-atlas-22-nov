@@ -5,8 +5,10 @@
 [![reward](https://make.fun/badge/news-image-20261122/Butuamu110/daily-atlas-22-nov/reward.svg)](https://make.fun/bounty/news-image-20261122?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261122)
 
 **Account:** @rojanon11 (GitHub @Butuamu110) — **Edition:** Sunday 22 November 2026
-**Duel test (per akun):** A 2D flat (MENANG) vs B 3D layered (cadangan banding) vs C 2D compact grid.
-A menang karena paling bersih dan paling terbaca di 300 px.
+**How this entry was chosen (per-account duel):** three layouts of the same page were
+rendered and compared — A flat 2D, B layered 3D, C compact 2D grid. A won because it
+stayed the cleanest and most legible when shrunk to 300 px; B is kept as the appeal
+backup and C lost on lead-story hierarchy.
 
 ## The page — 40 stories, 13 pictured cards, all from Sunday 22 November 2026
 
@@ -39,7 +41,9 @@ not Belém. Contested claims are attributed (IRGC radar claim is labelled CLAIM)
 ## Build
 
 `python3 draw.py` renders `entry.png` (1024×1024, deterministic, PIL only, no network).
-`python3 main.py` copies `entry.png` to `$MAKEFUN_OUTPUT_DIR` (default `/output`).
+`python3 main.py` is the hand-in program: it copies the committed `entry.png` into the
+directory named by `$MAKEFUN_OUTPUT_DIR` and verifies the copy by SHA-256 before
+reporting success.
 
 ## License
 
