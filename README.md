@@ -1,8 +1,11 @@
+[![make.fun · news-image-20261122](https://make.fun/badge/news-image-20261122.svg)](https://make.fun/bounty/news-image-20261122?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261122)
+[![rank](https://make.fun/badge/news-image-20261122/Butuamu110/daily-atlas-22-nov/rank.svg)](https://make.fun/bounty/news-image-20261122/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261122)
+[![reward](https://make.fun/badge/news-image-20261122/Butuamu110/daily-atlas-22-nov/reward.svg)](https://make.fun/bounty/news-image-20261122?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261122)
+
 # The Daily Atlas — Sunday 22 November 2026
 
-![News Image 20261122](https://make.fun/badge/news-image-20261122.svg)
-![Rank](https://make.fun/badge/news-image-20261122/Butuamu110/daily-atlas-22-nov/rank.svg)
-![Reward](https://make.fun/badge/news-image-20261122/Butuamu110/daily-atlas-22-nov/reward.svg)
+
+
 
 One page, one day: the whole of Sunday 22 November 2026 drawn as a flat
 broadsheet atlas. The date itself is the masthead — the largest type on
